@@ -66,19 +66,18 @@ with col2:
 
 st.caption("Examples: **Pi Mensae** (TESS, known planet) · **Kepler-10** (Kepler) · **TrES-2** (Kepler)")
 
-c1, c2 = st.columns(2)
-with c1:
-    min_period = st.slider(
-        "Shortest orbit to look for (days)", 0.5, 10.0, 0.5, 0.5,
-        help="The shortest 'year' to search for. 0.5 means: also consider planets that "
-             "whip around their star in half a day. Leave the defaults unless you're curious.",
+with st.expander("⚙️ Advanced options (most people can skip this)"):
+    st.caption(
+        "These set the range of orbital 'years' the search looks through. The defaults "
+        "(0.5–20 days) cover most detectable planets — only change them if you're "
+        "specifically after something that orbits faster or slower. Widening or narrowing "
+        "this doesn't make a result 'more correct'; it just changes where the search looks."
     )
-with c2:
-    max_period = st.slider(
-        "Longest orbit to look for (days)", 5.0, 30.0, 20.0, 1.0,
-        help="The longest 'year' to search for. We can only spot orbits shorter than the "
-             "observing window, so very long periods aren't reliably detectable here.",
-    )
+    c1, c2 = st.columns(2)
+    with c1:
+        min_period = st.slider("Shortest orbit to look for (days)", 0.5, 10.0, 0.5, 0.5)
+    with c2:
+        max_period = st.slider("Longest orbit to look for (days)", 5.0, 30.0, 20.0, 1.0)
 
 go = st.button("Find transits", type="primary")
 
