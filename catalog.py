@@ -55,18 +55,31 @@ def _period_matches(p_detected: float, p_known: float | None, tol: float = 0.02)
 
 def _extract_period(row) -> float | None:
     """Pull an orbital period from a catalog row, trying the column names the
-    confirmed-planet and TOI tables use. Returns None if absent."""
+    confirmed-planet and TOI tables use. Returns None if absent.
+
+    NASA returns periods as astropy Quantities *with units* (days), and some rows
+    are masked/empty — both broke a naive float() call, so we unwrap and guard."""
     for col in ("pl_orbper", "toi_period", "period"):
         try:
             val = row[col]
         except (KeyError, TypeError, IndexError):
             continue
+        # Unwrap an astropy Quantity (value + unit) down to a plain number.
+        val = getattr(val, "value", val)
+        # Skip masked / missing entries.
+        try:
+            import numpy as _np
+            if val is None or _np.ma.is_masked(val):
+                continue
+        except Exception:
+            if val is None:
+                continue
         try:
             f = float(val)
-            if f == f and f > 0:  # not NaN, positive
-                return f
         except (TypeError, ValueError):
             continue
+        if f == f and f > 0:  # not NaN, positive
+            return f
     return None
 
 
