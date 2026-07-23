@@ -100,9 +100,10 @@ def _describe(period: float, depth: float, snr: float) -> str:
         return ("No convincing transit found — the strongest dip is weak and "
                 "likely noise. Try a cleaner target or a wider period range.")
     strength = "a strong" if snr >= 7 else "a plausible"
-    return (f"Detected {strength} transit-like signal: a repeating "
-            f"{depth * 100:.2f}% dip every {period:.2f} days "
-            f"(SNR ≈ {snr:.1f}). Consistent with a candidate planet — worth vetting.")
+    return (f"Detected {strength} transit-like signal: the star's brightness dips by "
+            f"{depth * 100:.2f}% every {period:.2f} days, over and over "
+            f"(signal strength ≈ {snr:.1f}× the noise). "
+            f"That's consistent with a candidate planet — worth a closer look.")
 
 
 # --- Self-test: inject a known planet, confirm we recover its period. ---

@@ -20,12 +20,24 @@ planets from noise and eclipsing binaries. This is a first-pass vetting tool.
 2. **Detect** — `detection.py` runs Box Least Squares: it slides a box-shaped
    dip across thousands of trial periods and finds the one that best explains a
    repeating transit.
-3. **Judge** — the app reports period, depth, and a signal-to-noise score, then
-   folds the data so you can see the transit stack up at phase 0.
+3. **Vet** — `catalog.py` cross-checks the star against NASA's confirmed-planet
+   and TOI catalogs (via `astroquery`), and — crucially — compares the *detected
+   period* to any known planet's period. A star can host several planets, so a
+   position match isn't a signal match. It returns one of: *recovered a known
+   planet*, *known host but a different period (possible extra signal)*, or
+   *uncatalogued*.
+4. **Triage** — the app combines signal strength + catalog status into a plain
+   recommendation (save / ignore), lets you log detections and export them as CSV,
+   and points genuinely interesting leads toward real vetting communities.
 
-The detection maths is deliberately isolated in `detection.py` (no web or plotting
-code) so it can be read and unit-tested on its own. Run `python detection.py` to
-see it recover a planet injected into synthetic data.
+The detection and vetting logic are deliberately isolated in `detection.py` and
+`catalog.py` (no web or plotting code) so they can be read and unit-tested on their
+own. Run `python detection.py` to see it recover a planet injected into synthetic
+data.
+
+**Honest scope:** this is a vetting and learning tool, not an automated discovery
+pipeline. NASA's own pipelines already run detection across all this data; the value
+here is transparent triage and funnelling real leads to humans.
 
 ---
 
@@ -42,11 +54,15 @@ Then open the local URL it prints (usually http://localhost:8501).
 
 ## Roadmap
 
-- **v1 (this)** — single-target BLS transit search with a clean verdict.
-- **v2** — an ML classifier trained on labelled Kepler/TESS candidates to score
+- **v1 — Detect** ✅ single-target BLS transit search with a clean verdict.
+- **v2a — Vet** ✅ NASA catalog cross-check, multi-planet-aware triage, session
+  log + CSV export, escalation guidance. *(this release)*
+- **v2b — Share** — a shared community repository so multiple people can contribute
+  and browse detections (needs a storage backend).
+- **v3 — Watch** — a scheduled watchlist pipeline that checks for new TESS data on
+  chosen stars and reports transit-like signals.
+- **v4 — Judge** — an ML classifier trained on labelled candidates to score
   planet-vs-false-positive automatically.
-- **v3** — a live daily pipeline that pulls new TESS data and emails a findings
-  report.
-- **v4** — push toward secondary signals (candidate exomoons).
+- **v5 — Reach** — push toward secondary signals (candidate exomoons).
 
 Built by Sree. Detection by Box Least Squares; data courtesy of NASA / MAST.
