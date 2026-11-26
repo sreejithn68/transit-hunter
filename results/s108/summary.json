@@ -1,0 +1,10 @@
+{
+  "sector": 108,
+  "stars_searched": 10798,
+  "stars_failed": 24,
+  "strong_signals": 1916,
+  "strong_planet_like": 231,
+  "not_in_any_catalog": 37,
+  "clean_candidates": 17,
+  "catalogs_unavailable": []
+}
