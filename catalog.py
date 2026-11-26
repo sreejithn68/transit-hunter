@@ -95,128 +95,122 @@ def _extract_name(row, kind: str) -> str:
     return "unnamed object"
 
 
-def crosscheck(
-    ra: float | None,
-    dec: float | None,
-    detected_period: float,
-    snr: float,
-    radius_arcsec: float = 120.0,
-) -> CatalogVerdict:
-    """Cross-check a detection against NASA's confirmed-planet and TOI catalogs."""
-    if ra is None or dec is None:
-        return CatalogVerdict(
-            status=STATUS_NO_POSITION,
-            headline="Couldn't determine the star's sky position, so no catalog check.",
-            detail="Without coordinates we can't ask NASA whether this star is known. "
-                   "The detection above still stands on its own.",
-            recommend_save=False,
-        )
+class ArchiveError(RuntimeError):
+    """NASA's archive couldn't be queried."""
 
+
+def query_known(ra: float, dec: float, radius_arcsec: float = 120.0) -> list[KnownObject]:
+    """Every confirmed planet and TOI catalogued within `radius_arcsec` of the
+    star. One call per star — reuse the list for every detected signal.
+    Raises ArchiveError if NASA's archive can't be reached at all."""
     try:
         import astropy.units as u
         from astropy.coordinates import SkyCoord
         from astroquery.ipac.nexsci.nasa_exoplanet_archive import NasaExoplanetArchive
+    except Exception as e:  # pragma: no cover - dependency problem
+        raise ArchiveError(str(e)) from e
 
-        coord = SkyCoord(ra=ra * u.deg, dec=dec * u.deg)
-        radius = radius_arcsec * u.arcsec
-
-        known: list[KnownObject] = []
-
-        # Confirmed planets
+    coord = SkyCoord(ra=ra * u.deg, dec=dec * u.deg)
+    radius = radius_arcsec * u.arcsec
+    known: list[KnownObject] = []
+    failures = []
+    for table, kind in (("pscomppars", "confirmed"), ("toi", "candidate (TOI)")):
         try:
-            conf = NasaExoplanetArchive.query_region(
-                table="pscomppars", coordinates=coord, radius=radius)
-            for row in conf:
-                known.append(KnownObject(_extract_name(row, "confirmed"),
-                                         _extract_period(row), "confirmed"))
-        except Exception:
-            pass  # table/query hiccup — fall through with whatever we have
-
-        # TESS Objects of Interest (candidates)
-        try:
-            toi = NasaExoplanetArchive.query_region(
-                table="toi", coordinates=coord, radius=radius)
-            for row in toi:
-                known.append(KnownObject(_extract_name(row, "candidate (TOI)"),
-                                         _extract_period(row), "candidate (TOI)"))
-        except Exception:
-            pass
-
-    except Exception as e:
-        return CatalogVerdict(
-            status=STATUS_ARCHIVE_DOWN,
-            headline="NASA's archive couldn't be reached for the catalog check.",
-            detail=f"The detection still stands; only the 'is it already known?' step "
-                   f"failed ({e}). Try again in a moment.",
-            recommend_save=False,
-        )
-
-    return _judge(known, detected_period, snr)
+            for row in NasaExoplanetArchive.query_region(
+                    table=table, coordinates=coord, radius=radius):
+                known.append(KnownObject(_extract_name(row, kind), _extract_period(row), kind))
+        except Exception as e:
+            failures.append(e)
+    if len(failures) == 2:
+        raise ArchiveError(str(failures[0]))
+    return known
 
 
-def _judge(known: list[KnownObject], detected_period: float, snr: float) -> CatalogVerdict:
-    """Combine catalog matches + signal strength into a triage recommendation."""
-    strong = snr >= 7
-    plausible = snr >= 3
+def _status_only(status, headline, detail) -> CatalogVerdict:
+    return CatalogVerdict(status=status, headline=headline, detail=detail, recommend_save=False)
+
+
+def crosscheck(ra: float | None, dec: float | None, detected_period: float,
+               strength: str, vet_verdict: str | None = None,
+               radius_arcsec: float = 120.0) -> CatalogVerdict:
+    """Convenience wrapper: query the archive and judge a single signal."""
+    if ra is None or dec is None:
+        return no_position_verdict()
+    try:
+        known = query_known(ra, dec, radius_arcsec)
+    except ArchiveError as e:
+        return archive_down_verdict(e)
+    return judge(known, detected_period, strength, vet_verdict)
+
+
+def no_position_verdict() -> CatalogVerdict:
+    return _status_only(
+        STATUS_NO_POSITION,
+        "Couldn't determine the star's sky position, so no catalog check.",
+        "Without coordinates we can't ask NASA whether this star is known. "
+        "The detection still stands on its own.")
+
+
+def archive_down_verdict(e) -> CatalogVerdict:
+    return _status_only(
+        STATUS_ARCHIVE_DOWN,
+        "NASA's archive couldn't be reached for the catalog check.",
+        f"The detection still stands; only the 'is it already known?' step failed "
+        f"({e}). Try again in a moment.")
+
+
+def judge(known: list[KnownObject], detected_period: float, strength: str,
+          vet_verdict: str | None = None) -> CatalogVerdict:
+    """Combine catalog matches, signal strength ('strong' | 'plausible' | 'weak')
+    and the vetting verdict into a triage recommendation."""
+    strong = strength == "strong"
+    false_pos = vet_verdict == "likely false positive"
+    fp_note = (" However, the vetting checks below flag it as a likely false "
+               "positive (e.g. an eclipsing binary), so it isn't worth escalating."
+               if false_pos else "")
 
     if not known:
         if strong:
             return CatalogVerdict(
                 status=STATUS_UNCATALOGUED,
-                headline="No known planet at this star — and the signal is strong.",
+                headline="No known planet or TOI at this star — and the signal is strong.",
                 detail="NASA's catalogs list nothing here, yet a clear repeating dip was "
-                       "found. Most such signals turn out to be noise or an eclipsing "
-                       "binary on closer look — but this is exactly the kind of lead worth "
-                       "escalating to a human vetting community.",
-                recommend_save=True,
-                known=known,
-            )
+                       "found. Most such signals turn out to be eclipsing binaries or "
+                       "artifacts on closer look — but this is exactly the kind of lead "
+                       "worth a careful second look." + fp_note,
+                recommend_save=not false_pos, known=known)
         return CatalogVerdict(
             status=STATUS_UNCATALOGUED,
-            headline="No known planet here, and the signal is weak.",
-            detail="Nothing catalogued at this position, and the dip isn't convincing. "
-                   "Most likely noise — not worth saving unless you want a record.",
-            recommend_save=False,
-            known=known,
-        )
+            headline="No known planet here, and the signal isn't strong enough to trust.",
+            detail="Nothing catalogued at this position, and the dip doesn't clear the "
+                   "'strong' bar. Probably noise — keep it only if you want a record.",
+            recommend_save=False, known=known)
 
-    # There ARE known objects here. Do any match our detected period?
     matched = [k for k in known if _period_matches(detected_period, k.period)]
-    names = ", ".join(k.name for k in known[:4])
-
     if matched:
         m = matched[0]
         return CatalogVerdict(
             status=STATUS_KNOWN_MATCH,
-            headline=f"Recovered a known planet: {m.name} "
-                     f"({m.period:.3f} d).",
-            detail="Your detected period matches a planet NASA already has on record. "
-                   "That's a great sanity check that the tool works — but there's nothing "
-                   "new to save here; it's already catalogued.",
-            recommend_save=False,
-            known=known,
-        )
+            headline=f"Recovered a known object: {m.name} ({m.period:.3f} d, {m.kind}).",
+            detail="Your detected period matches one NASA already has on record — a "
+                   "good sanity check that the tool works, but nothing new to save.",
+            recommend_save=False, known=known)
 
-    # Known host, but our period is different — a star can host several planets.
     with_periods = [k for k in known if k.period]
-    known_pd = ", ".join(f"{k.name} ({k.period:.2f} d)" for k in with_periods[:4]) or names
+    known_pd = ", ".join(f"{k.name} ({k.period:.2f} d)" for k in with_periods[:4]) \
+        or ", ".join(k.name for k in known[:4])
     if strong:
         return CatalogVerdict(
             status=STATUS_KNOWN_DIFF,
             headline="Known planet host — but your signal's period is different.",
             detail=f"This star already hosts: {known_pd}. Your detected period "
-                   f"({detected_period:.3f} d) doesn't match any of them. Stars often have "
-                   f"multiple planets, so this could be an additional signal worth a closer "
-                   f"look — or a harmonic/artifact of the known one. A genuinely interesting "
-                   f"case to flag.",
-            recommend_save=True,
-            known=known,
-        )
+                   f"({detected_period:.3f} d) doesn't match any of them. Stars often "
+                   f"have several planets, so this could be an additional one — or an "
+                   f"artifact of the known signal." + fp_note,
+            recommend_save=not false_pos, known=known)
     return CatalogVerdict(
         status=STATUS_KNOWN_DIFF,
-        headline="Known planet host; your signal differs but is weak.",
-        detail=f"This star hosts: {known_pd}. Your period ({detected_period:.3f} d) doesn't "
-               f"match, but the signal is too weak to trust — probably an artifact.",
-        recommend_save=False,
-        known=known,
-    )
+        headline="Known planet host; your signal differs but isn't strong.",
+        detail=f"This star hosts: {known_pd}. Your period ({detected_period:.3f} d) "
+               f"doesn't match, but the signal is too weak to trust.",
+        recommend_save=False, known=known)
