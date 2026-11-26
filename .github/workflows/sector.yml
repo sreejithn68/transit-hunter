@@ -91,9 +91,7 @@ jobs:
           pattern: shard-*
           path: shards
           merge-multiple: true
-      - name: Merge, check novelty, notify
-        env:
-          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+      - name: Merge, check novelty, write digest
         run: >
           python -m pipeline.merge_and_notify --sector ${{ needs.plan.outputs.sector }}
           --shards shards --out results/s${{ needs.plan.outputs.sector }}
@@ -107,12 +105,3 @@ jobs:
           git commit -m "Sector ${{ needs.plan.outputs.sector }} search results" || exit 0
           git pull --rebase
           git push
-      - name: Notify on failure
-        if: failure()
-        env:
-          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
-        run: |
-          curl -s -H "Title: Transit Hunter: sector ${{ needs.plan.outputs.sector }} run failed" \
-            -H "Priority: default" -H "Tags: warning" \
-            -d "See ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
-            "https://ntfy.sh/$NTFY_TOPIC"

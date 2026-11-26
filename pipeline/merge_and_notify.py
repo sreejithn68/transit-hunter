@@ -1,6 +1,6 @@
 """
 merge_and_notify.py — combine a sector's shards, keep only genuinely new,
-vetted candidates, save results, and push a digest to your phone (ntfy.sh).
+vetted candidates, save results, and write a digest (digest.md; optionally pushed via ntfy.sh).
 
     NTFY_TOPIC=... python -m pipeline.merge_and_notify --sector 108 \
         --shards results/s108/shards --out results/s108
@@ -31,9 +31,14 @@ MAX_DEEP = 40
 
 
 def notify(topic: str | None, title: str, body: str, priority: str = "default",
-           click: str | None = None, tags: str = "telescope"):
+           click: str | None = None, tags: str = "telescope", out: str | None = None):
+    """Write the digest to <out>/digest.md (read by the Claude scheduled task);
+    also push it to ntfy.sh if NTFY_TOPIC is set (optional)."""
+    if out:
+        with open(os.path.join(out, "digest.md"), "w") as f:
+            f.write(f"# {title}\n\n{body}\n")
     if not topic:
-        print(f"[no NTFY_TOPIC set] {title}\n{body}")
+        print(f"{title}\n{body}")
         return
     headers = {"Title": title.encode("utf-8"), "Priority": priority, "Tags": tags,
                "Markdown": "yes"}
@@ -127,7 +132,8 @@ def main():
     if failed:
         head += f"\n⚠️ Catalogs unavailable: {', '.join(failed)} — treat novelty as unconfirmed."
     if len(cands) == 0:
-        notify(topic, f"Sector {a.sector}: nothing new", head, priority="low", tags="telescope")
+        notify(topic, f"Sector {a.sector}: nothing new", head, priority="low", tags="telescope",
+               out=a.out)
         return
     lines = []
     for c in cands.head(5).itertuples():
@@ -142,7 +148,7 @@ def main():
     notify(topic, f"🪐 Sector {a.sector}: {s['clean_candidates']} clean candidate(s)",
            head + "\n\n" + "\n".join(lines) +
            "\n\nLeads, not discoveries — review before reporting.",
-           priority=prio, click=best.exofop, tags="ringed_planet")
+           priority=prio, click=best.exofop, tags="ringed_planet", out=a.out)
 
 
 if __name__ == "__main__":
