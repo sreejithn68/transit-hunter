@@ -1,0 +1,76 @@
+sample,tic,true_period,found_period,period,depth_ppm,snr,sde,n_transits,strength,vetting,flags,any_strong_planetlike
+planet,376866659,3.2527618,False,9.76031,4936,92.2,7.8,2,plausible,planet-like,warn:Number of transits,False
+planet,267263253,4.1269046,True,4.12637,9323,400.1,11.7,12,strong,planet-like,,True
+planet,451645081,8.1125147,True,8.11278,1059,17.4,20.3,7,strong,planet-like,,True
+planet,269701147,8.8803281,True,8.87949,1161,42.8,22.5,4,strong,planet-like,,True
+planet,165297570,2.9895092,True,2.99023,11085,274.4,16.7,7,strong,planet-like,warn:Implied size,True
+planet,203189770,3.612771,True,3.61285,9627,233.1,19.6,13,strong,planet-like,warn:Implied size,True
+planet,355867695,3.1274634,True,3.12803,1309,13.9,14.2,9,strong,planet-like,,True
+planet,83092282,6.4025295,True,6.40226,3621,147.5,24.0,9,strong,planet-like,,True
+planet,178367144,3.4091568,True,3.40928,14580,143.4,43.7,13,strong,planet-like,warn:Light from neighbours,True
+planet,166836920,5.7525804,True,5.7525,4880,287.1,32.0,12,strong,planet-like,,True
+planet,158324245,1.7635881,True,1.76355,6984,184.1,28.7,23,strong,suspicious,warn:Secondary eclipse; warn:Light from neighbours,False
+planet,149603524,4.4119372,True,4.41175,12681,562.8,22.2,20,strong,planet-like,,True
+planet,203214138,5.1699026,True,5.16981,2284,32.5,40.8,8,strong,planet-like,,True
+planet,261867566,3.7395716,True,3.73951,12721,177.8,36.2,11,strong,planet-like,,True
+planet,15692883,5.147905,True,5.14794,3926,144.7,34.8,9,strong,planet-like,warn:Implied size,True
+planet,76923707,4.5320502,True,4.53197,6772,109.5,43.2,9,strong,planet-like,,True
+planet,375506058,2.650232,True,2.65003,4923,368.5,22.5,19,strong,suspicious,warn:Secondary eclipse; warn:Matching second signal,False
+planet,252479260,3.2122302,True,3.21224,12141,405.6,37.2,9,strong,planet-like,,True
+planet,70899085,4.0520368,True,4.05195,4642,52.4,14.6,12,strong,planet-like,,True
+planet,374530847,2.152163,True,2.15224,14458,189.8,51.0,15,strong,planet-like,,True
+planet,357501308,7.4355709,True,14.87271,1656,30.1,15.3,2,plausible,likely false positive,fail:Odd/even depths; warn:Half-period alias; warn:Number of transits; fail:Image shift during dip,False
+planet,394918211,4.3780194,True,4.37801,1513,38.8,29.4,9,strong,planet-like,warn:Image shift during dip,True
+planet,384888319,5.8795752,True,5.87947,1198,16.6,30.9,6,strong,planet-like,,True
+planet,342642208,8.6007557,True,8.60092,3971,71.4,29.4,5,strong,planet-like,,True
+impostor,96246348,1.4095184,True,1.40949,2916,17.4,25.0,32,strong,suspicious,warn:Dip shape (U vs V); warn:Light from neighbours,False
+impostor,177126182,6.3037582,True,6.30822,1156,18.6,14.9,4,strong,likely false positive,fail:Image shift during dip,False
+impostor,20178111,1.734422,True,1.73429,1799,44.6,24.7,27,strong,likely false positive,fail:Secondary eclipse; fail:Matching second signal; warn:Image shift during dip,False
+impostor,22843856,1.8497201,True,1.84972,5177,140.4,23.7,24,strong,planet-like,warn:Dip shape (U vs V),True
+impostor,324395151,3.4551479,True,3.45529,4608,145.0,19.1,13,strong,planet-like,warn:Secondary eclipse,True
+planet,9725627,4.1567834,True,4.15679,4354,68.6,33.1,10,strong,planet-like,,True
+impostor,384744828,3.0421334,True,3.04305,1597,26.2,22.1,8,strong,planet-like,,True
+impostor,1100766816,1.62263,True,1.62235,1450,22.0,20.4,30,strong,planet-like,warn:Dip shape (U vs V),True
+impostor,141227133,2.42232,True,2.42292,4853,87.5,22.1,16,strong,likely false positive,warn:Secondary eclipse; fail:Implied size; warn:Light from neighbours,False
+impostor,277871306,3.9602774,True,3.96024,4089,42.7,57.6,9,strong,likely false positive,warn:Dip shape (U vs V); fail:Matching second signal,False
+impostor,5109298,1.6187107,True,1.61774,1070,20.0,12.1,15,strong,suspicious,warn:Dip shape (U vs V); warn:Light from neighbours,False
+impostor,197650870,2.1853174,False,1.64346,1609,8.5,8.7,25,plausible,suspicious,warn:Implied size; warn:Duration vs. star size; warn:Light from neighbours,False
+impostor,427352241,1.2667147,True,1.26482,1217,16.1,14.7,16,strong,suspicious,warn:Dip shape (U vs V); warn:Image shift during dip; warn:Light from neighbours,False
+impostor,182943944,1.10422,True,1.10399,1991,40.0,18.9,37,strong,planet-like,warn:Dip shape (U vs V),True
+impostor,453209605,2.80944,True,2.81054,2400,29.6,20.4,17,strong,likely false positive,fail:Secondary eclipse,False
+impostor,49899799,7.0114,True,7.01132,7171,296.9,19.8,5,strong,likely false positive,warn:Secondary eclipse; warn:Implied size; fail:Image shift during dip,False
+impostor,284050395,1.35932,True,1.36149,2034,39.0,10.1,12,strong,likely false positive,fail:Odd/even depths; warn:Dip shape (U vs V); fail:Duration vs. star size; warn:Light from neighbours,False
+impostor,155114483,5.2651271,True,5.26502,2999,66.3,43.1,10,strong,planet-like,,True
+impostor,280307604,4.3229915,True,4.32168,2411,11.5,13.6,6,strong,planet-like,warn:Dip shape (U vs V),True
+impostor,344600402,1.3875331,True,1.38855,554,9.0,12.9,19,strong,suspicious,warn:Dip shape (U vs V); warn:Duration vs. star size,False
+impostor,91576611,4.43651,True,4.44077,1681,42.7,14.2,5,strong,likely false positive,fail:Secondary eclipse; fail:Matching second signal; fail:Image shift during dip,False
+impostor,245462406,2.27456,True,2.27382,1004,26.3,32.1,20,strong,likely false positive,warn:Dip shape (U vs V); fail:Image shift during dip,False
+impostor,184679932,2.1721416,True,2.17208,15051,223.5,47.7,19,strong,suspicious,warn:Secondary eclipse; warn:Implied size,False
+quiet,365247154,,,2.99953,82,9.9,5.2,14,weak,planet-like,,False
+quiet,59087638,,,1.04292,169,10.7,3.2,43,weak,likely false positive,fail:Duration vs. star size; fail:Image shift during dip,False
+quiet,85632736,,,7.31541,1524,15.7,4.7,2,weak,likely false positive,warn:Number of transits; fail:Implied size; fail:Image shift during dip,False
+impostor,457138169,1.0924536,True,1.09245,678,31.1,61.3,45,strong,planet-like,warn:Dip shape (U vs V),True
+impostor,269450900,2.32439,True,2.32467,2260,229.1,37.4,21,strong,likely false positive,warn:Dip shape (U vs V); fail:Image shift during dip,False
+impostor,78775584,5.5553784,True,5.55526,1322,15.3,19.5,10,strong,likely false positive,fail:Secondary eclipse; warn:Dip shape (U vs V),False
+quiet,311086416,,,13.31067,750,8.4,7.3,2,plausible,planet-like,warn:Number of transits,False
+quiet,4383421,,,19.64233,650,14.4,7.6,2,plausible,likely false positive,warn:Number of transits; fail:Implied size; fail:Image shift during dip,False
+quiet,387454239,,,1.00431,262,8.2,8.7,44,plausible,suspicious,warn:Dip shape (U vs V); warn:Implied size,False
+quiet,14077245,,,0.82726,169,11.5,14.0,52,strong,likely false positive,fail:Transit vs. stellar wave; fail:Duration vs. star size; fail:Matching second signal; fail:Image shift during dip,False
+quiet,67828699,,,0.50001,467,8.8,17.3,86,strong,likely false positive,fail:Secondary eclipse; warn:Half-period alias; warn:Dip shape (U vs V); fail:Matching second signal,False
+quiet,25957652,,,9.61067,211,7.0,6.4,5,weak,planet-like,,False
+quiet,245820145,,,0.50907,87,4.7,9.0,126,weak,likely false positive,fail:Secondary eclipse; warn:Half-period alias; warn:Dip shape (U vs V); warn:Implied size; fail:Image shift during dip,False
+quiet,344298746,,,0.64938,217,7.5,10.6,98,plausible,likely false positive,fail:Secondary eclipse; warn:Half-period alias; warn:Dip shape (U vs V),False
+quiet,257814393,,,16.11929,322,10.8,8.6,3,plausible,likely false positive,fail:Implied size,False
+quiet,228507389,,,25.4106,606,7.8,4.6,2,weak,planet-like,warn:Number of transits,False
+quiet,247018046,,,0.70158,71,6.0,7.8,61,weak,likely false positive,fail:Image shift during dip,False
+quiet,244168777,,,12.77791,790,13.1,5.3,2,weak,likely false positive,fail:Odd/even depths; warn:Dip shape (U vs V); warn:Number of transits; fail:Implied size; fail:Image shift during dip,False
+quiet,365333343,,,0.52534,129,4.4,6.4,80,weak,suspicious,warn:Dip shape (U vs V); warn:Image shift during dip,False
+quiet,111225194,,,0.52104,120,4.8,7.2,84,weak,likely false positive,fail:Image shift during dip,False
+quiet,306404221,,,18.82425,3130,22.9,7.7,1,weak,likely false positive,warn:Number of transits; fail:Implied size; fail:Image shift during dip,False
+quiet,300964626,,,0.81608,48,7.5,11.9,43,plausible,likely false positive,warn:Duration vs. star size; fail:Image shift during dip,False
+quiet,257800486,,,2.08909,411,5.8,7.4,11,weak,planet-like,,False
+quiet,258770213,,,4.22265,947,11.1,7.3,10,plausible,likely false positive,warn:Dip shape (U vs V); fail:Implied size,False
+quiet,52068289,,,6.53053,397,12.5,9.3,6,strong,suspicious,warn:Dip shape (U vs V); warn:Duration vs. star size; warn:Image shift during dip,False
+quiet,257330895,,,4.86979,157,7.6,4.6,8,weak,planet-like,,False
+quiet,405337536,,,1.10367,965,13.2,16.2,37,strong,likely false positive,fail:Transit vs. stellar wave; warn:Dip shape (U vs V); fail:Duration vs. star size,False
+quiet,436648121,,,0.82426,71,9.4,20.0,77,strong,likely false positive,fail:Secondary eclipse; warn:Half-period alias; warn:Duration vs. star size; fail:Image shift during dip,False

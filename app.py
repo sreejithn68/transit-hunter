@@ -59,7 +59,7 @@ with st.expander("🔰 New here? Start with this 30-second explainer", expanded=
 col1, col2 = st.columns([2, 1])
 with col1:
     target = st.text_input(
-        "Star name or ID", value="Pi Mensae",
+        "Star name or ID", value=st.query_params.get("target", "Pi Mensae"),
         help="A name (Pi Mensae, Kepler-10, TOI-700) or an ID (TIC 261136679, KIC 11904151).")
 with col2:
     mission = st.selectbox(
@@ -134,7 +134,8 @@ if go:
             st.error(f"Detection failed: {e}")
             st.stop()
 
-    reports = [vetting.vet(*out.isolated(i), s, data.star, others=out.signals)
+    reports = [vetting.vet(*out.isolated(i), s, data.star, others=out.signals,
+                           centroids=data.centroids)
                for i, s in enumerate(out.signals)]
 
     with st.spinner("Cross-checking against NASA's catalogs…"):
@@ -380,7 +381,7 @@ if st.session_state.log:
     st.divider()
     st.subheader(f"📋 My detection log ({len(st.session_state.log)})")
     df = pd.DataFrame(st.session_state.log)
-    st.dataframe(df, use_container_width=True)
+    st.dataframe(df, width="stretch")
     d1, d2 = st.columns(2)
     with d1:
         st.download_button("⬇️ Download log (CSV)", df.to_csv(index=False),

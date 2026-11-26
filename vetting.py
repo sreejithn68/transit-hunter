@@ -119,8 +119,74 @@ def max_duration(period, star: Star, depth: float) -> float | None:
     return float(period / np.pi * np.arcsin(x))
 
 
+def per_transit_depths(time, flux, r: TransitResult):
+    """Depth of each individual transit: (epoch numbers, depths)."""
+    epoch = np.round((time - r.t0) / r.period)
+    dt = time - (r.t0 + epoch * r.period)
+    inner = np.abs(dt) < 0.35 * r.duration
+    near = (np.abs(dt) > 0.75 * r.duration) & (np.abs(dt) < 2.0 * r.duration)
+    ep, dep = [], []
+    for e in np.unique(epoch[inner]):
+        i, o = inner & (epoch == e), near & (epoch == e)
+        if i.sum() >= 1 and o.sum() >= 4:
+            ep.append(int(e))
+            dep.append(float(np.median(flux[o]) - np.mean(flux[i])))
+    return np.array(ep), np.array(dep)
+
+
+def _odd_even_empirical(time, flux, r: TransitResult):
+    ep, dep = per_transit_depths(time, flux, r)
+    odd, even = dep[ep % 2 == 1], dep[ep % 2 == 0]
+    if odd.size < 3 or even.size < 3:
+        return None
+    err = np.hypot(np.std(odd, ddof=1) / np.sqrt(odd.size),
+                   np.std(even, ddof=1) / np.sqrt(even.size))
+    return float(abs(odd.mean() - even.mean()) / err) if err > 0 else None
+
+
+def _segment_normalise(t, v, gap=0.5):
+    """Remove each sector's own zero point (the star sits on different pixels)."""
+    v = v.copy()
+    cuts = np.concatenate([[0], np.where(np.diff(t) > gap)[0] + 1, [t.size]])
+    for a, b in zip(cuts[:-1], cuts[1:]):
+        v[a:b] -= np.median(v[a:b])
+    return v
+
+
+def centroid_shift(ctime, col, row, r: TransitResult):
+    """Does the star's image move during transit? Returns (shift_pixels, sigma)
+    or None. A significant shift means the dip probably comes from a
+    neighbouring star in the same pixels (a blended eclipsing binary)."""
+    from detection import bin_lightcurve, detrend, transit_mask
+    ctime = np.asarray(ctime, dtype=float)
+    shifts, errs = [], []
+    for c in (col, row):
+        c = np.asarray(c, dtype=float)
+        ok = np.isfinite(ctime) & np.isfinite(c)
+        if ok.sum() < 100:
+            return None
+        order = np.argsort(ctime[ok])
+        t, v = bin_lightcurve(ctime[ok][order], c[ok][order], 10.0)
+        v = _segment_normalise(t, v) + 100.0   # detrend() divides, so keep it positive
+        base = 100.0
+        intr = transit_mask(t, r.period, r.duration, r.t0)
+        near = transit_mask(t, r.period, r.duration, r.t0, scale=4.0) & ~transit_mask(
+            t, r.period, r.duration, r.t0, scale=1.5)
+        resid = (detrend(t, v, mask=transit_mask(t, r.period, r.duration, r.t0, scale=2.0)) - 1) * base
+        if intr.sum() < 5 or near.sum() < 10:
+            return None
+        d = resid[intr].mean() - resid[near].mean()
+        sig = robust_std(resid[near])
+        e = sig * np.sqrt(1 / intr.sum() + 1 / near.sum())
+        shifts.append(d)
+        errs.append(e)
+    shift = float(np.hypot(*shifts))
+    err = float(np.hypot(*errs) / np.sqrt(2))
+    return shift, (shift / err if err > 0 else 0.0)
+
+
 def vet(time, flux, r: TransitResult, star: Star | None = None,
-        others: list[TransitResult] | None = None) -> VetReport:
+        others: list[TransitResult] | None = None, centroids=None) -> VetReport:
     """Run every check on one signal. Pass the light curve with OTHER signals
     removed (see SearchOutput.isolated) so they can't contaminate the stats."""
     star = star or Star()
@@ -134,9 +200,20 @@ def vet(time, flux, r: TransitResult, star: Star | None = None,
     # 1. Odd vs even transit depths -------------------------------------------
     (d_odd, e_odd), (d_even, e_even) = st["depth_odd"], st["depth_even"]
     s = _sig(d_odd, e_odd, d_even, e_even)
-    status = FAIL if s > 4 else WARN if s > 3 else PASS
+    # Real transits vary in depth beyond white noise (sector-to-sector dilution
+    # corrections, spots, systematics). Use the scatter of individual transit
+    # depths when there are enough of them, so that doesn't masquerade as odd/even.
+    emp = _odd_even_empirical(time, flux, r)
+    if emp is not None:
+        s = min(s, emp)
+    mean_d = 0.5 * (d_odd + d_even)
+    rel = abs(d_odd - d_even) / mean_d if mean_d > 0 else 0.0
+    # Needs to be both significant AND sizeable: at very high SNR, a few-percent
+    # difference from systematics becomes "significant" without meaning anything.
+    status = FAIL if (s > 4 and rel > 0.15) else WARN if (s > 3 and rel > 0.05) else PASS
     checks.append(Check(
-        "Odd/even depths", status, f"{d_odd*1e6:.0f} vs {d_even*1e6:.0f} ppm ({s:.1f}σ)",
+        "Odd/even depths", status,
+        f"{d_odd*1e6:.0f} vs {d_even*1e6:.0f} ppm ({s:.1f}σ, {rel*100:.0f}% apart)",
         "Alternate dips have different depths — the hallmark of an eclipsing binary "
         "seen at half its true period." if status != PASS else
         "Alternate dips are equally deep, as expected for a planet."))
@@ -231,14 +308,55 @@ def vet(time, flux, r: TransitResult, star: Star | None = None,
                                "star is very small.")
 
     # 9. Another detected signal at the same period = secondary eclipse -------
-    twins = [o for o in (others or []) if o is not r and _same_period(o.period, r.period)]
+    from detection import coincident
+    twins = [o for o in (others or []) if o is not r and _same_period(o.period, r.period)
+             and not coincident(o, r)]
     if twins:
         o = twins[0]
         off = ((o.t0 - r.t0) / r.period) % 1.0
-        checks.append(Check(
-            "Matching second signal", FAIL, f"{o.period:.4f} d at phase {off:.2f}",
-            "A second dip train repeats on the same period — two eclipses per orbit "
-            "means two stars eclipsing each other, not a planet."))
+        ratio = min(o.depth, r.depth) / max(o.depth, r.depth, 1e-9)
+        if r.depth >= o.depth and ratio < 0.1:
+            # A tiny second dip can be a hot planet passing BEHIND its star.
+            checks.append(Check(
+                "Matching second signal", WARN,
+                f"{o.period:.4f} d at phase {off:.2f}, {ratio*100:.0f}% as deep",
+                "A much shallower dip on the same period. A hot giant planet hidden "
+                "behind its star can cause this; a faint binary companion can too."))
+        else:
+            checks.append(Check(
+                "Matching second signal", FAIL,
+                f"{o.period:.4f} d at phase {off:.2f}, {ratio*100:.0f}% as deep",
+                "A second dip train repeats on the same period — two eclipses per orbit "
+                "means two stars eclipsing each other, not a planet."))
+
+    # 10. Centroid shift (needs pixel-centroid time series) --------------------
+    if centroids is not None:
+        res = centroid_shift(*centroids, r)
+        if res is None:
+            checks.append(Check("Image shift during dip", NA, "—", "Not enough centroid data."))
+        else:
+            shift, sig = res
+            # A dip of fractional depth δ on a source d pixels from the photocentre
+            # moves the image by ≈ δ·d, so the implied source offset is shift/δ.
+            # Deep transits on the target itself still shift the image slightly
+            # (neighbours' light in the aperture), so only an offset beyond ~1
+            # pixel (21″) — i.e. clearly a different star — counts.
+            offset = shift / max(r.depth, 1e-6)
+            if offset > 10:   # far outside the aperture: a data glitch, not a blend
+                checks.append(Check("Image shift during dip", NA,
+                                    f"{shift*1000:.1f} millipixels",
+                                    "Centroid data unreliable for this star."))
+                offset = None
+        if res is not None and offset is not None:
+            status = (FAIL if sig > 5 and offset > 1.0 else
+                      WARN if sig > 3 and offset > 0.5 else PASS)
+            checks.append(Check(
+                "Image shift during dip", status,
+                f"{shift*1000:.1f} millipixels ({sig:.1f}σ) → source ≈{offset:.2f} px "
+                f"(≈{offset*21:.0f}″) from star",
+                "The star's image moves during each dip — the dip likely comes from a "
+                "neighbouring star blended into the same pixels." if status != PASS else
+                "The star's image stays put during the dip — consistent with this star."))
 
     if star.contamination is not None:
         c = star.contamination

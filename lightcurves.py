@@ -31,6 +31,7 @@ class LightCurveData:
     star: Star
     tic: int | None
     n_segments: int          # sectors / quarters / campaigns used
+    centroids: tuple | None  # (time, col, row) pixel centroids, for the blend test
     n_available: int         # how many existed
     baseline_days: float
 
@@ -93,6 +94,10 @@ def fetch(target: str, mission: str = "Auto", max_segments: int = 8) -> LightCur
     lc = collection.stitch(lambda x: x.remove_nans().normalize()).remove_nans()
     time = np.asarray(lc.time.value, dtype=float)
     flux = np.asarray(lc.flux.value, dtype=float)
+    centroids = None
+    if "centroid_col" in lc.colnames and "centroid_row" in lc.colnames:
+        centroids = (time, np.asarray(lc["centroid_col"].value, dtype=float),
+                     np.asarray(lc["centroid_row"].value, dtype=float))
     ra, dec = _num(meta, "RA_OBJ", "RA"), _num(meta, "DEC_OBJ", "DEC")
     tic = meta.get("TICID")
     author = str(products.table["author"][0])
@@ -100,5 +105,5 @@ def fetch(target: str, mission: str = "Auto", max_segments: int = 8) -> LightCur
         str(meta.get("MISSION", meta.get("TELESCOP", ""))), "segments")
     label = f"{target} · {author} · {len(collection)} {seg_word}"
     return LightCurveData(time, flux, label, ra, dec, star_from_meta(meta),
-                          int(tic) if tic else None, len(collection), n_available,
+                          int(tic) if tic else None, len(collection), centroids, n_available,
                           float(time.max() - time.min()))

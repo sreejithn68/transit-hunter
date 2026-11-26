@@ -77,16 +77,32 @@ class SearchOutput:
     def isolated(self, i: int) -> tuple[np.ndarray, np.ndarray]:
         """Light curve with every OTHER signal's transits removed — use this when
         vetting signal i so a second planet can't contaminate its statistics."""
+        me = self.signals[i]
+        own = transit_mask(self.time, me.period, me.duration, me.t0, scale=2.0)
         keep = np.ones(self.time.size, dtype=bool)
         for j, s in enumerate(self.signals):
-            if j != i and s.strength != "weak" and not _related(s.period, self.signals[i].period):
-                keep &= ~transit_mask(self.time, s.period, s.duration, s.t0, scale=2.0)
+            if j != i and s.strength != "weak" and not _related(s.period, me.period):
+                other = transit_mask(self.time, s.period, s.duration, s.t0, scale=2.0)
+                keep &= ~(other & ~own)    # never cut this signal's own transits
         return self.time[keep], self.flux[keep]
 
 
 def _related(p1: float, p2: float, tol: float = 0.005) -> bool:
     """Same period (or 2x / 0.5x) — e.g. the secondary eclipse of a binary."""
     return any(abs(p1 * f - p2) / p2 < tol for f in (1.0, 2.0, 0.5))
+
+
+def coincident(a, b) -> bool:
+    """Related periods AND overlapping transit times: `a` is just a leftover of
+    `b`'s own transits (e.g. a P/2 echo), not a separate dip train."""
+    if not _related(a.period, b.period):
+        return False
+    tol = max(a.duration, b.duration)
+    for x, y in ((a, b), (b, a)):
+        ph = ((x.t0 - y.t0) / y.period) % 1.0
+        if min(ph, 1 - ph) * y.period < tol:
+            return True
+    return False
 
 
 # --------------------------------------------------------------------------
@@ -526,6 +542,14 @@ def search(time, flux, min_period: float = 0.5, max_period: float | None = None,
             sel = keep & ~found_mask & ~glitch
             r = _refine_bls(t_flat[sel], f_flat[sel], r)
 
+        echo = next((s for s in signals if coincident(r, s)), None)
+        if echo is not None:
+            # Leftover of an earlier signal's transits: widen that mask, move on.
+            found_mask |= transit_mask(t_raw, echo.period, echo.duration, echo.t0, scale=3.0)
+            found_mask |= transit_mask(t_raw, r.period, r.duration, r.t0, scale=2.0)
+            t_flat, f_flat, keep = prepare(t_raw, f_raw, mask=found_mask,
+                                           window_days=window_days, already_binned=True)
+            continue
         if r.strength == "weak":
             if not signals:
                 signals.append(r)
