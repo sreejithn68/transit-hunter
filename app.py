@@ -1,330 +1,398 @@
 """
 app.py — Transit Hunter
-A web app that pulls a real NASA light curve for any star, searches it for
-exoplanet transits, and vets each finding against NASA's catalogs.
+A web app that pulls real NASA light curves for any star, searches them for
+exoplanet transits (several planets per star), vets each signal for the usual
+false positives, and cross-checks it against NASA's catalogs.
 
-Pipeline: fetch (lightkurve) → detect (detection.py) → cross-check (catalog.py).
+Pipeline: fetch (lightcurves.py) → detect (detection.py) → vet (vetting.py)
+          → cross-check (catalog.py).
 
 Run locally:  streamlit run app.py
 """
 
 from datetime import datetime, timezone
 
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
 import streamlit as st
 
-from detection import find_transit, fold
 import catalog
+import detection
+import lightcurves
+import vetting
 
 st.set_page_config(page_title="Transit Hunter", page_icon="🪐", layout="centered")
 
+SIGNAL_COLORS = ["#b4531f", "#2a6fb0", "#3a8f4b", "#8e44ad", "#c0392b"]
+STATUS_ICON = {"pass": "✅", "warn": "⚠️", "fail": "❌", "n/a": "➖"}
+
 # --- Session state --------------------------------------------------------
 if "log" not in st.session_state:
-    st.session_state.log = []      # saved detections
+    st.session_state.log = []
 if "last" not in st.session_state:
-    st.session_state.last = None   # most recent analysis, so results survive reruns
+    st.session_state.last = None
 
 st.title("🪐 Transit Hunter")
 st.markdown(
-    "Search a real NASA light curve for exoplanet transits — then vet the finding "
-    "against NASA's catalogs. Enter a star, and this tool fetches its brightness from the "
-    "[MAST archive](https://archive.stsci.edu), runs Box Least Squares detection, checks "
-    "whether the signal is already a known planet, and tells you whether it's worth a closer look."
+    "Search real NASA light curves for exoplanet transits — then vet every signal "
+    "for the usual impostors and check it against NASA's catalogs. Enter a star: this "
+    "tool fetches its brightness from the [MAST archive](https://archive.stsci.edu), hunts "
+    "for repeating dips (several planets if they're there), runs false-positive checks, "
+    "and tells you whether anything is worth a closer look."
 )
 
 with st.expander("🔰 New here? Start with this 30-second explainer", expanded=False):
     st.markdown(
         "**How do we find a planet we can't even see?** We watch its star's brightness.\n\n"
         "When a planet passes *in front* of its star (from our point of view), it blocks a "
-        "tiny sliver of light — so the star looks very slightly dimmer for a few hours. Then "
-        "the planet moves on and the brightness returns. Because the planet orbits over and "
-        "over, this dimming **repeats on a regular schedule**.\n\n"
-        "So we look for a dip in brightness that comes back again and again, evenly spaced. "
-        "That repeating dip is called a **transit**, and it's the fingerprint of a planet.\n\n"
-        "This app hunts for that dip, then asks NASA whether the star is already a known "
-        "planet host — so you know if you've re-found something known, or spotted something "
-        "worth escalating. Every technical word has a tooltip (hover the **?**) or is in the "
-        "**Glossary** at the bottom."
+        "tiny sliver of light — so the star looks very slightly dimmer for a few hours. "
+        "Because the planet orbits over and over, this dimming **repeats on a regular "
+        "schedule**. That repeating dip is a **transit**.\n\n"
+        "But many things fake a transit — most often two stars eclipsing each other. So "
+        "after finding a dip, this app runs the same kind of sanity checks professional "
+        "astronomers use, and asks NASA whether the signal is already known. Every "
+        "technical word is in the **Glossary** at the bottom."
     )
 
 # --- Inputs ---------------------------------------------------------------
 col1, col2 = st.columns([2, 1])
 with col1:
     target = st.text_input(
-        "Star name or ID",
-        value="Pi Mensae",
-        help="Try a name (Pi Mensae, Kepler-10) or an ID (TIC 261136679, KIC 11904151).",
-    )
+        "Star name or ID", value=st.query_params.get("target", "Pi Mensae"),
+        help="A name (Pi Mensae, Kepler-10, TOI-700) or an ID (TIC 261136679, KIC 11904151).")
 with col2:
     mission = st.selectbox(
         "Mission", ["Auto", "TESS", "Kepler", "K2"], index=0,
-        help="Which NASA space telescope's data to use. Kepler and TESS both hunt planets "
-             "the same way. 'Auto' just uses whatever data exists for your star.",
-    )
+        help="Which NASA space telescope's data to use. 'Auto' prefers TESS, then Kepler, then K2.")
 
-st.caption("Examples: **Pi Mensae** (TESS, known planet) · **Kepler-10** (Kepler) · **TrES-2** (Kepler)")
+st.caption("Try: **Pi Mensae** (one planet) · **TOI-700** (several planets, incl. an "
+           "Earth-sized one) · **Kepler-10** (a 20-hour 'lava world' and a 45-day planet)")
+
+n_segments = st.slider(
+    "How much data to use (TESS sectors / Kepler quarters)", 1, 20, 4,
+    help="More data = more transits stacked = smaller planets and longer orbits become "
+         "findable. It also takes longer to download and search.")
 
 with st.expander("⚙️ Advanced options (most people can skip this)"):
-    st.caption(
-        "These set the range of orbital 'years' the search looks through. The defaults "
-        "(0.5–20 days) cover most detectable planets — only change them if you're "
-        "specifically after something that orbits faster or slower. Widening or narrowing "
-        "this doesn't make a result 'more correct'; it just changes where the search looks."
-    )
     c1, c2 = st.columns(2)
     with c1:
-        min_period = st.slider("Shortest orbit to look for (days)", 0.5, 10.0, 0.5, 0.5)
+        min_period = st.number_input("Shortest orbit to look for (days)", 0.3, 20.0, 0.5, 0.1)
     with c2:
-        max_period = st.slider("Longest orbit to look for (days)", 5.0, 30.0, 20.0, 1.0)
+        max_period = st.number_input(
+            "Longest orbit to look for (days, 0 = as long as the data allows)", 0.0, 500.0, 0.0, 1.0)
+    c3, c4 = st.columns(2)
+    with c3:
+        tls_ok = detection.tls_available()
+        method_label = st.radio(
+            "Search method",
+            ["Fast (Box Least Squares)", "Deep (Transit Least Squares)"],
+            help="Deep search fits a realistic transit shape instead of a box. It is a bit "
+                 "more sensitive to small planets, and slower." +
+                 ("" if tls_ok else " (Unavailable here: package not installed.)"))
+    with c4:
+        max_planets = st.slider("Max planets to look for", 1, 5, 3)
+    st.caption("The period range is automatically capped so that at least two transits "
+               "fit inside the data.")
 
+method = "tls" if method_label.startswith("Deep") else "bls"
 go = st.button("Find transits", type="primary")
 
 
-# --- Data fetch (cached so repeat searches are instant) -------------------
-def _coords_from_lc(lc):
-    """Best-effort star coordinates (RA/Dec in degrees) from light-curve metadata."""
-    meta = getattr(lc, "meta", {}) or {}
-    for rk, dk in (("RA_OBJ", "DEC_OBJ"), ("RA", "DEC"), ("ra", "dec")):
-        ra, dec = meta.get(rk), meta.get(dk)
-        if ra is not None and dec is not None:
-            try:
-                return float(ra), float(dec)
-            except (TypeError, ValueError):
-                pass
-    try:
-        ra_a, dec_a = getattr(lc, "ra", None), getattr(lc, "dec", None)
-        if ra_a is not None and dec_a is not None:
-            return float(getattr(ra_a, "value", ra_a)), float(getattr(dec_a, "value", dec_a))
-    except (TypeError, ValueError):
-        pass
-    return None, None
+# --- Cached steps ---------------------------------------------------------
+@st.cache_data(show_spinner=False, max_entries=20)
+def cached_fetch(target: str, mission: str, n_segments: int):
+    return lightcurves.fetch(target, mission, max_segments=n_segments)
 
 
-@st.cache_data(show_spinner=False)
-def fetch_light_curve(target: str, mission: str):
-    """Download and clean a light curve. Returns (time, flux, label, ra, dec)."""
-    import lightkurve as lk
-
-    kwargs = {} if mission == "Auto" else {"mission": mission}
-    search = lk.search_lightcurve(target, **kwargs)
-    if len(search) == 0:
-        raise LookupError(f"No light curve found for '{target}'.")
-
-    collection = search[: min(len(search), 5)].download_all()
-    lc = collection.stitch() if collection is not None else search[0].download()
-
-    ra, dec = _coords_from_lc(lc)
-    lc = lc.remove_nans().normalize().flatten(window_length=401)
-    time = np.asarray(lc.time.value, dtype=float)
-    flux = np.asarray(lc.flux.value, dtype=float)
-    label = f"{target} · {getattr(lc, 'mission', mission)}"
-    return time, flux, label, ra, dec
+@st.cache_data(show_spinner=False, max_entries=20)
+def cached_search(time, flux, min_period, max_period, method, max_planets):
+    return detection.search(time, flux, min_period=min_period,
+                            max_period=max_period or None, method=method,
+                            max_planets=max_planets)
 
 
-# --- Run analysis on button press, then stash results so they survive reruns ---
+@st.cache_data(show_spinner=False, ttl=24 * 3600)
+def cached_known(ra, dec):
+    return catalog.query_known(ra, dec)
+
+
+# --- Run analysis ---------------------------------------------------------
 if go:
     try:
-        with st.spinner(f"Fetching light curve for {target}…"):
-            time, flux, label, ra, dec = fetch_light_curve(target.strip(), mission)
+        with st.spinner(f"Fetching light curves for {target}… (first time can take a minute)"):
+            data = cached_fetch(target.strip(), mission, n_segments)
     except Exception as e:
         st.error(f"Couldn't load data: {e}")
         st.stop()
 
     with st.spinner("Searching for transits…"):
         try:
-            res = find_transit(time, flux, min_period=min_period, max_period=max_period)
+            out = cached_search(data.time, data.flux, float(min_period), float(max_period),
+                                method, max_planets)
         except Exception as e:
             st.error(f"Detection failed: {e}")
             st.stop()
 
+    reports = [vetting.vet(*out.isolated(i), s, data.star, others=out.signals,
+                           centroids=data.centroids)
+               for i, s in enumerate(out.signals)]
+
     with st.spinner("Cross-checking against NASA's catalogs…"):
-        cat = catalog.crosscheck(ra, dec, res.period, res.snr)
+        if data.ra is None or data.dec is None:
+            verdicts = [catalog.no_position_verdict() for _ in out.signals]
+        else:
+            try:
+                known = cached_known(data.ra, data.dec)
+                verdicts = [catalog.judge(known, s.period, s.strength, r.verdict)
+                            for s, r in zip(out.signals, reports)]
+            except catalog.ArchiveError as e:
+                verdicts = [catalog.archive_down_verdict(e) for _ in out.signals]
 
-    st.session_state.last = {
-        "target": target.strip(), "label": label, "ra": ra, "dec": dec,
-        "time": time, "flux": flux, "res": res, "cat": cat,
-    }
+    st.session_state.last = {"target": target.strip(), "data": data, "out": out,
+                             "reports": reports, "verdicts": verdicts}
 
 
-# --- Render results from the stored analysis (not gated on `go`) ----------
+# --- Plot helpers ---------------------------------------------------------
+def binned(x, y, nbins=80, lo=-0.5, hi=0.5):
+    edges = np.linspace(lo, hi, nbins + 1)
+    idx = np.digitize(x, edges)
+    bx, by = [], []
+    for b in range(1, len(edges)):
+        sel = idx == b
+        if sel.sum() > 2:
+            bx.append(x[sel].mean())
+            by.append(np.median(y[sel]))
+    return np.array(bx), np.array(by)
+
+
+def zoom_for(s):
+    """Phase half-width that shows the transit nicely (≈ 3 durations)."""
+    return float(np.clip(1.5 * s.duration / s.period, 0.02, 0.5))
+
+
+# --- Render results -------------------------------------------------------
 last = st.session_state.last
 if last:
-    res, cat = last["res"], last["cat"]
-    time, flux, label = last["time"], last["flux"], last["label"]
+    data, out = last["data"], last["out"]
+    reports, verdicts = last["reports"], last["verdicts"]
+    dets = out.detections
 
-    # Detection verdict
-    if res.snr >= 7:
-        st.success(res.verdict)
-    elif res.snr >= 3:
-        st.info(res.verdict)
+    if not dets:
+        st.warning(out.signals[0].verdict)
     else:
-        st.warning(res.verdict)
+        strong = [s for s in dets if s.strength == "strong"]
+        st.success(f"Found **{len(dets)}** transit-like signal{'s' if len(dets) > 1 else ''} "
+                   f"({len(strong)} strong) in {data.label} — "
+                   f"{data.baseline_days:.0f} days of data.")
+    if data.n_available > data.n_segments:
+        st.caption(f"Used the {data.n_segments} most recent of {data.n_available} available "
+                   f"segments. Raise the data slider to search them all.")
 
-    m1, m2, m3 = st.columns(3)
-    m1.metric(
-        "Orbital period", f"{res.period:.3f} d",
-        help="How long the planet takes to go around its star once — its 'year'. "
-             "3 days means a transit repeats every 3 days.",
-    )
-    m2.metric(
-        "Transit depth", f"{res.depth_ppm:,.0f} ppm",
-        help="How much the star dims during a transit, in parts-per-million (1,000 ppm = "
-             "0.1% dimmer). A bigger planet blocks more light, so a deeper dip usually means "
-             "a bigger planet.",
-    )
-    m3.metric(
-        "Signal / noise", f"{res.snr:.1f}",
-        help="How strongly the dip stands out from random jitter. Rough guide: below 3 = "
-             "probably noise, 3–7 = worth a look, above 7 = a strong signal.",
-    )
-
-    # --- Plots ------------------------------------------------------------
+    # Full light curve with transits marked
     st.subheader("Full light curve")
     st.caption(
-        "**What this is:** the star's brightness (up-down) over time (left-right), straight "
-        "from NASA. **What to look for:** a mostly-flat line — that's the steady star — with "
-        "occasional tiny drops where a planet may have crossed in front. The dips are usually "
-        "too small and too spread out to spot by eye here; that's what the next plot is for."
-    )
-    fig1, ax1 = plt.subplots(figsize=(8, 3))
-    ax1.plot(time, flux, ".", ms=1, alpha=0.5, color="#b4531f")
-    ax1.set_xlabel("Time (days)  →  each dot is one brightness measurement")
-    ax1.set_ylabel("Brightness (1.0 = normal)")
-    ax1.set_title(label)
-    st.pyplot(fig1)
+        "**What this is:** the star's brightness over time, cleaned and flattened (slow "
+        "stellar wiggles removed). **What to look for:** a flat band with occasional tiny "
+        "drops. Coloured ticks mark where each detected signal's transits fall.")
+    fig, ax = plt.subplots(figsize=(8, 3))
+    ax.plot(out.time, out.flux, ".", ms=1, alpha=0.5, color="#666")
+    lo = np.percentile(out.flux, 0.5)
+    for k, s in enumerate(dets):
+        n0 = np.ceil((out.time.min() - s.t0) / s.period)
+        n1 = np.floor((out.time.max() - s.t0) / s.period)
+        times = s.t0 + np.arange(n0, n1 + 1) * s.period
+        ax.plot(times, np.full(times.size, lo - 0.3 * (1 - lo)), "^",
+                color=SIGNAL_COLORS[k % 5], ms=5, label=f"signal {k + 1}: {s.period:.3f} d")
+    if dets:
+        ax.legend(loc="lower right", fontsize=7)
+    ax.set_xlabel("Time (days)")
+    ax.set_ylabel("Brightness (1.0 = normal)")
+    ax.set_title(data.label, fontsize=9)
+    st.pyplot(fig)
 
-    st.subheader("Folded on best period")
-    st.caption(
-        "**What this is:** we took the detected 'year' length and stacked every orbit on top "
-        "of each other, so all the repeated dips line up in one place. **What to look for:** a "
-        "clear U- or V-shaped dip in the middle (at phase 0). A clean dip here is the "
-        "fingerprint of a real, repeating transit. A flat, shapeless cloud means no convincing "
-        "planet. The orange line is the averaged trend to help you see the shape."
-    )
-    phase, fflux = fold(time, flux, res.period, res.t0)
-    fig2, ax2 = plt.subplots(figsize=(8, 3))
-    ax2.plot(phase, fflux, ".", ms=1, alpha=0.4, color="#555")
-    bins = np.linspace(-0.5, 0.5, 80)
-    which = np.digitize(phase, bins)
-    bx, by = [], []
-    for b in range(1, len(bins)):
-        sel = which == b
-        if sel.sum() > 0:
-            bx.append(phase[sel].mean())
-            by.append(fflux[sel].mean())
-    ax2.plot(bx, by, "-", color="#b4531f", lw=1.5)
-    ax2.set_xlabel("Phase  (0 = the moment of transit; ±0.5 = halfway around the orbit)")
-    ax2.set_ylabel("Brightness (1.0 = normal)")
-    ax2.set_xlim(-0.5, 0.5)
-    st.pyplot(fig2)
+    # Periodogram
+    s0 = out.signals[0]
+    if s0.periods is not None:
+        st.subheader("Periodogram — which orbit length fits best?")
+        st.caption(
+            "**What this is:** for every trial orbit length, how well a repeating dip "
+            "explains the data. **What to look for:** a tall, isolated spike. Smaller "
+            "spikes at ½× or 2× the period are normal echoes of the same signal.")
+        fig, ax = plt.subplots(figsize=(8, 2.6))
+        ax.plot(s0.periods, s0.power, lw=0.6, color="#444")
+        for k, s in enumerate(dets):
+            ax.axvline(s.period, color=SIGNAL_COLORS[k % 5], alpha=0.6, lw=1.5, ls="--")
+        ax.set_xscale("log")
+        ax.set_xlabel("Trial orbital period (days)")
+        ax.set_ylabel("Signal strength (SDE)")
+        st.pyplot(fig)
 
-    # --- Vetting: is this already known? ----------------------------------
-    st.subheader("Is this already known? (catalog cross-check)")
-    if cat.status in (catalog.STATUS_UNCATALOGUED, catalog.STATUS_KNOWN_DIFF) and res.snr >= 7:
-        st.success(f"**{cat.headline}**")
-    elif cat.status == catalog.STATUS_KNOWN_MATCH:
-        st.info(f"**{cat.headline}**")
-    else:
-        st.warning(f"**{cat.headline}**")
-    st.write(cat.detail)
+    # One tab per signal
+    shown = dets or out.signals[:1]
+    tabs = st.tabs([f"Signal {k + 1} · {s.period:.3f} d" for k, s in enumerate(shown)])
+    for k, (tab, s) in enumerate(zip(tabs, shown)):
+        rep, cat = reports[k], verdicts[k]
+        color = SIGNAL_COLORS[k % 5]
+        with tab:
+            box = st.success if s.strength == "strong" else st.info if s.strength == "plausible" else st.warning
+            box(s.verdict)
 
-    if cat.known:
-        rows = [{"Object": k.name,
-                 "Type": k.kind,
-                 "Known period (d)": f"{k.period:.3f}" if k.period else "—"}
-                for k in cat.known]
-        st.caption("Known planets / candidates already catalogued at this star:")
-        st.table(pd.DataFrame(rows))
+            m1, m2, m3 = st.columns(3)
+            m1.metric("Orbital period", f"{s.period:.4f} d",
+                      help="How long one orbit takes — the planet's 'year'.")
+            m2.metric("Transit depth", f"{s.depth_ppm:,.0f} ppm",
+                      help="How much the star dims (1,000 ppm = 0.1%). Bigger planet → deeper dip.")
+            m3.metric("Duration", f"{s.duration * 24:.1f} h",
+                      help="How long each transit lasts.")
+            m4, m5, m6 = st.columns(3)
+            m4.metric("SNR", f"{s.snr:.1f}",
+                      help="Depth divided by its uncertainty, counting every in-transit point "
+                           "and correcting for correlated noise. ≥ 7.1 plausible, ≥ 8 strong.")
+            m5.metric("SDE", f"{s.sde:.1f}",
+                      help="How far this period's spike stands above the rest of the "
+                           "periodogram. ≥ 9 means the period clearly wins.")
+            m6.metric("Transits seen", f"{s.n_transits}",
+                      help="Individual transits with data. Fewer than 3 = period less certain.")
+            if rep.radius_earth:
+                st.caption(f"Implied size ≈ **{rep.radius_earth:.1f} Earth radii** "
+                           f"(star radius {data.star.radius:.2f} R☉ from the TESS/Kepler input catalog).")
 
-    # --- Escalation guidance for genuinely interesting leads --------------
-    if cat.recommend_save and res.snr >= 7 and cat.status in (
-        catalog.STATUS_UNCATALOGUED, catalog.STATUS_KNOWN_DIFF):
-        with st.expander("🚀 This looks worth escalating — what next? (read before getting excited)"):
-            st.markdown(
-                "A strong, uncatalogued signal is a *lead*, not a discovery. The overwhelming "
-                "majority turn out to be eclipsing binaries, blends, or instrument artifacts. "
-                "The honest next steps:\n\n"
-                "1. **Sanity-check it yourself** — try a different sector/mission, widen the "
-                "period range, and see if the dip survives.\n"
-                "2. **Take it to people who vet for a living** — "
-                "[Planet Hunters TESS](https://www.zooniverse.org/projects/nora-dot-eisner/planet-hunters-tess) "
-                "is a citizen-science community that inspects exactly these signals and has "
-                "found ~150 candidates the algorithms missed.\n"
-                "3. **Real follow-up lives at "
-                "[ExoFOP-TESS](https://exofop.ipac.caltech.edu)** — NASA's repository for "
-                "follow-up observations of candidates. Viewing is open; uploading needs "
-                "registration and genuine new observations (e.g. your own telescope data), "
-                "not archival re-detections.\n\n"
-                "This tool does the fast first pass. A human takes it the last mile."
-            )
+            # Folded plot
+            st.markdown("**Folded on this period**")
+            st.caption("Every orbit stacked on top of each other, zoomed on the transit. A "
+                       "clean, flat-bottomed dip at 0 is what a planet looks like.")
+            ti, fi = out.isolated(k)
+            phase, ff = detection.fold(ti, fi, s.period, s.t0)
+            z = zoom_for(s)
+            sel = np.abs(phase) < z
+            fig, ax = plt.subplots(figsize=(8, 3))
+            ax.plot(phase[sel] * s.period * 24, ff[sel], ".", ms=2, alpha=0.4, color="#777")
+            bx, by = binned(phase[sel], ff[sel], 60, -z, z)
+            ax.plot(bx * s.period * 24, by, "-", color=color, lw=2)
+            ax.set_xlabel("Hours from mid-transit")
+            ax.set_ylabel("Brightness")
+            st.pyplot(fig)
 
-    # --- Save + log -------------------------------------------------------
-    st.subheader("Save this detection")
-    rec = "✅ Our take: **worth saving.**" if cat.recommend_save else \
-          "➖ Our take: **not worth saving** (already known or too weak) — but your call."
-    st.markdown(rec)
+            # Odd / even
+            st.markdown("**Odd vs. even transits**")
+            st.caption("If alternate dips differ in depth, it's probably two stars of different "
+                       "sizes eclipsing each other — not a planet.")
+            epoch = np.round((ti - s.t0) / s.period).astype(int)
+            fig, axes = plt.subplots(1, 2, figsize=(8, 2.6), sharey=True)
+            for ax, parity, name in ((axes[0], 1, "Odd"), (axes[1], 0, "Even")):
+                m = (epoch % 2) == parity
+                ph, fl = detection.fold(ti[m], fi[m], s.period, s.t0)
+                sel = np.abs(ph) < z
+                ax.plot(ph[sel] * s.period * 24, fl[sel], ".", ms=2, alpha=0.3, color="#777")
+                bx, by = binned(ph[sel], fl[sel], 40, -z, z)
+                ax.plot(bx * s.period * 24, by, "-", color=color, lw=2)
+                ax.axhline(1 - s.depth, color="k", lw=0.6, ls=":")
+                ax.set_title(name, fontsize=9)
+                ax.set_xlabel("Hours")
+            st.pyplot(fig)
 
-    if st.button("💾 Save to my log"):
-        st.session_state.log.append({
-            "saved_at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
-            "target": last["target"],
-            "ra": last["ra"], "dec": last["dec"],
-            "period_d": round(res.period, 4),
-            "depth_ppm": round(res.depth_ppm, 1),
-            "snr": round(res.snr, 2),
-            "catalog_status": cat.status,
-            "verdict": cat.headline,
-            "recommended": "save" if cat.recommend_save else "ignore",
-        })
-        st.success("Saved. Scroll to **My detection log** below.")
+            # Vetting checklist
+            st.markdown(f"**False-positive checks → {rep.verdict.upper()}**")
+            st.table(pd.DataFrame([{"": STATUS_ICON[c.status], "Check": c.name,
+                                    "Value": c.value, "What it means": c.explanation}
+                                   for c in rep.checks]))
+
+            # Catalog
+            st.markdown("**Is this already known?**")
+            if cat.status == catalog.STATUS_KNOWN_MATCH:
+                st.info(f"**{cat.headline}**")
+            elif cat.recommend_save:
+                st.success(f"**{cat.headline}**")
+            else:
+                st.warning(f"**{cat.headline}**")
+            st.write(cat.detail)
+            if cat.known:
+                st.caption("Known planets / candidates already catalogued at this star:")
+                st.table(pd.DataFrame([{"Object": o.name, "Type": o.kind,
+                                        "Known period (d)": f"{o.period:.3f}" if o.period else "—"}
+                                       for o in cat.known]))
+
+            if cat.recommend_save:
+                with st.expander("🚀 This looks worth escalating — what next? (read before getting excited)"):
+                    st.markdown(
+                        "A strong, uncatalogued, planet-like signal is a *lead*, not a discovery. "
+                        "The honest next steps:\n\n"
+                        "1. **Re-check it yourself** — try more sectors, the deep search, and see "
+                        "whether the dip survives.\n"
+                        "2. **Check it isn't known anywhere** — search the star's TIC ID on "
+                        "[ExoFOP-TESS](https://exofop.ipac.caltech.edu/tess/) (TOIs *and* "
+                        "community TOIs), [exoplanet.eu](https://exoplanet.eu) and "
+                        "[SIMBAD](https://simbad.u-strasbg.fr).\n"
+                        "3. **Take it to people who vet for a living** — "
+                        "[Planet Hunters TESS](https://www.zooniverse.org/projects/nora-dot-eisner/planet-hunters-tess) "
+                        "or submit a community TOI on ExoFOP (needs a free account).\n\n"
+                        "This tool does the fast first pass. A human takes it the last mile.")
+
+            rec = ("✅ Our take: **worth saving.**" if cat.recommend_save else
+                   "➖ Our take: **not worth saving** (known, weak, or failed vetting) — your call.")
+            st.markdown(rec)
+            if st.button("💾 Save to my log", key=f"save_{k}"):
+                st.session_state.log.append({
+                    "saved_at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
+                    "target": last["target"], "tic": data.tic,
+                    "ra": data.ra, "dec": data.dec, "signal": k + 1,
+                    "period_d": round(s.period, 5), "t0": round(s.t0, 5),
+                    "duration_h": round(s.duration * 24, 2),
+                    "depth_ppm": round(s.depth_ppm, 1), "snr": round(s.snr, 2),
+                    "sde": round(s.sde, 2), "n_transits": s.n_transits,
+                    "radius_earth": round(rep.radius_earth, 2) if rep.radius_earth else None,
+                    "method": s.method, "strength": s.strength, "vetting": rep.verdict,
+                    "catalog_status": cat.status,
+                    "recommended": "save" if cat.recommend_save else "ignore",
+                })
+                st.success("Saved. Scroll to **My detection log** below.")
 
     with st.expander("📖 Glossary — every technical word, in plain English"):
         st.markdown(
             "**Light curve** — a graph of a star's brightness over time.\n\n"
-            "**Transit** — when a planet passes in front of its star from our viewpoint, "
-            "dimming it slightly. The event we're hunting for.\n\n"
-            "**Orbital period** — how long a planet takes to circle its star once. Its 'year'.\n\n"
-            "**Transit depth** — how much the star dims during a transit. Bigger planet → "
-            "deeper dip. Shown in **ppm** (parts-per-million): 10,000 ppm = 1%.\n\n"
-            "**Phase** — position within one orbit, from -0.5 to +0.5. 'Phase 0' is the middle "
-            "of the transit.\n\n"
-            "**Folding** — wrapping the light curve onto one orbit's length so all the repeated "
-            "dips pile up in the same spot.\n\n"
-            "**Signal-to-noise (SNR)** — how much the dip stands out above random jitter. "
-            "Higher = more trustworthy.\n\n"
-            "**Box Least Squares (BLS)** — the detection method. It slides a box-shaped dip "
-            "across thousands of possible orbit lengths to find the best repeating transit.\n\n"
-            "**TOI** — TESS Object of Interest: a candidate flagged by NASA's pipeline, not yet "
-            "confirmed as a planet.\n\n"
-            "**Confirmed planet** — a candidate that follow-up observations have verified.\n\n"
-            "**Catalog cross-check** — asking NASA's Exoplanet Archive whether a known planet or "
-            "candidate already sits at this star's position.\n\n"
-            "**MAST archive** — NASA's public library of space-telescope data.\n\n"
-            "**TIC / KIC ID** — catalogue ID numbers for stars (TESS / Kepler Input Catalog)."
-        )
+            "**Transit** — a planet passing in front of its star, dimming it slightly.\n\n"
+            "**Orbital period** — how long one orbit takes. The planet's 'year'.\n\n"
+            "**Transit depth** — how much the star dims, in **ppm** (parts-per-million; "
+            "10,000 ppm = 1%).\n\n"
+            "**Phase / folding** — wrapping the light curve onto one orbit so all the dips "
+            "pile up in the same place.\n\n"
+            "**SNR (signal-to-noise)** — how many times bigger the dip is than its "
+            "uncertainty. Corrected for *correlated noise* (slow wiggles that random-noise "
+            "maths would underestimate).\n\n"
+            "**SDE (signal detection efficiency)** — how far the best period's spike in the "
+            "periodogram stands above all the others.\n\n"
+            "**Periodogram** — signal strength vs. trial orbit length.\n\n"
+            "**BLS / TLS** — Box / Transit Least Squares: the search methods. BLS slides a box-"
+            "shaped dip; TLS a realistic transit shape.\n\n"
+            "**Eclipsing binary** — two stars orbiting and eclipsing each other: the most "
+            "common planet impostor.\n\n"
+            "**Odd/even test** — compares alternate dips; unequal depths betray a binary.\n\n"
+            "**Secondary eclipse** — a second dip half an orbit later, when the companion "
+            "passes *behind*. Big ones mean the companion glows — a star, not a planet.\n\n"
+            "**V-shaped dip** — no flat bottom; typical of grazing binaries.\n\n"
+            "**Contamination** — light from neighbouring stars falling in the same pixels.\n\n"
+            "**TOI / CTOI** — TESS Object of Interest (flagged by NASA) / Community TOI "
+            "(flagged by the public or other teams).\n\n"
+            "**TIC / KIC ID** — catalogue numbers for stars (TESS / Kepler Input Catalog).")
 
-# --- My detection log (persists across searches this session) -------------
+# --- My detection log -----------------------------------------------------
 if st.session_state.log:
     st.divider()
     st.subheader(f"📋 My detection log ({len(st.session_state.log)})")
     df = pd.DataFrame(st.session_state.log)
-    st.dataframe(df, use_container_width=True)
-    dcol1, dcol2 = st.columns([1, 1])
-    with dcol1:
-        st.download_button(
-            "⬇️ Download log (CSV)", df.to_csv(index=False),
-            file_name="my_transit_detections.csv", mime="text/csv",
-        )
-    with dcol2:
+    st.dataframe(df, width="stretch")
+    d1, d2 = st.columns(2)
+    with d1:
+        st.download_button("⬇️ Download log (CSV)", df.to_csv(index=False),
+                           file_name="my_transit_detections.csv", mime="text/csv")
+    with d2:
         if st.button("🗑️ Clear log"):
             st.session_state.log = []
             st.rerun()
 
 st.divider()
 st.caption(
-    "Built by Sree · data from NASA MAST via lightkurve · detection by Box Least Squares · "
-    "catalog cross-check via the NASA Exoplanet Archive. A vetting and learning tool — "
-    "not an automated discovery pipeline. Next: a community repository and a scheduled watchlist."
-)
+    "Built by Sree · data from NASA MAST via lightkurve · detection by Box / Transit Least "
+    "Squares · false-positive vetting · catalog cross-check via the NASA Exoplanet Archive. "
+    "A vetting and learning tool — not an automated discovery pipeline.")

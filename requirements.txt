@@ -5,3 +5,4 @@ astroquery>=0.4.7
 numpy>=1.24
 pandas>=2.0
 matplotlib>=3.7
+transitleastsquares>=1.32
